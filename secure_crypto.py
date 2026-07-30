@@ -9,11 +9,13 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.exceptions import InvalidTag
 
-SALT_SIZE = 16
-NONCE_SIZE = 12
-TAG_SIZE = 16
-ITERATIONS = 100_000
-KEY_SIZE = 32
+from config import SALT_SIZE, NONCE_SIZE, TAG_SIZE, ITERATIONS, KEY_SIZE
+
+# SALT_SIZE = 16
+# NONCE_SIZE = 12
+# TAG_SIZE = 16
+# ITERATIONS = 100_000
+# KEY_SIZE = 32
 
 def derive_key(password: str, salt: bytes) -> bytes:
     """
