@@ -1,2 +1,3 @@
-secret.txt
-vault.bin
+*.txt
+*.bin
+__pycache__
