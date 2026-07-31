@@ -1,7 +1,7 @@
 import subprocess
 import os
 import unittest
-from legacy_cipher import encrypt
+from src.legacy_cipher import encrypt
 
 class TestMasterCryptoPipeline(unittest.TestCase):
     def setUp(self):
@@ -40,7 +40,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
     def test_1_aes_encryption_decryption(self):
         """Tests secure_crypto.py encryption and decryption workflows."""
         encrypt_cmd = [
-            "python", "secure_crypto.py", "encrypt",
+            "python", "src/secure_crypto.py", "encrypt",
             "--input", self.plain_msg_path,
             "--output", self.encrypted_aes_path,
             "--password", self.test_password,
@@ -49,7 +49,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"AES Encryption failed: {res.stderr}")
 
         decrypt_cmd = [
-            "python", "secure_crypto.py", "decrypt",
+            "python", "src/secure_crypto.py", "decrypt",
             "--input", self.encrypted_aes_path,
             "--output", self.decrypted_aes_path,
             "--password", self.test_password,
@@ -63,7 +63,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
     def test_2_aes_tamper_detection(self):
         """Tests that secure_crypto.py rejects modified ciphertexts via authentication tags."""
         encrypt_cmd = [
-            "python", "secure_crypto.py", "encrypt",
+            "python", "src/secure_crypto.py", "encrypt",
             "--input", self.plain_msg_path,
             "--output", self.encrypted_aes_path,
             "--password", self.test_password,
@@ -79,7 +79,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
             f.write(data)
 
         decrypt_cmd = [
-            "python", "secure_crypto.py", "decrypt",
+            "python", "src/secure_crypto.py", "decrypt",
             "--input", self.tampered_aes_path,
             "--output", self.decrypted_aes_path,
             "--password", self.test_password,
@@ -97,7 +97,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
             f.write(ciphertext)
 
         crack_cmd = [
-            "python", "cryptanalysis_tool.py", "crack",
+            "python", "src/cryptanalysis_tool.py", "crack",
             "--ciphertext", self.legacy_ciphertext_path,
             "--known-plaintext", "SYSTEM_OVERFLOW!"
         ]
@@ -128,7 +128,7 @@ class TestMasterCryptoPipeline(unittest.TestCase):
             f.write(ciphertext)
 
         crack_cmd = [
-            "python", "cryptanalysis_tool.py", "crack",
+            "python", "src/cryptanalysis_tool.py", "crack",
             "--ciphertext", custom_ciphertext_path,
             "--known-plaintext", "CUSTOM_FLAG_XYZ!"
         ]
