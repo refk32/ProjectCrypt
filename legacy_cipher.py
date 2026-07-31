@@ -1,64 +1,77 @@
-import sys
-from typing import List
+"""Legacy LFSR stream cipher (128-bit state).
 
-TAP_POSITIONS = [127, 30, 12, 2]
-STATE_SIZE = 128
+This module implements the proprietary Linear Feedback Shift Register (LFSR)
+stream cipher used by the legacy system under analysis.
+"""
 
+from __future__ import annotations
 
-def run_lfsr_generator(seed: List[int], num_bytes: int) -> bytes:
-    """Simulates the legacy LFSR forward to generate a keystream of given length."""
-    current_state = list(seed)
-    keystream_bytes = bytearray()
-
-    for _ in range(num_bytes):
-        keystream_byte = 0
-        for bit_idx in range(8):
-            lsb = current_state[0]
-            keystream_byte |= lsb << bit_idx
-
-            feedback = (
-                current_state[127]
-                ^ current_state[30]
-                ^ current_state[12]
-                ^ current_state[2]
-                ^ 1
-            )
-            current_state = current_state[1:] + [feedback]
-
-        keystream_bytes.append(keystream_byte)
-    return bytes(keystream_bytes)
+MASK_128 = (1 << 128) - 1
 
 
-def encrypt_file(input_path: str, output_path: str, seed: List[int]) -> None:
-    """Encrypts a plaintext file using the legacy LFSR keystream."""
-    with open(input_path, "rb") as f:
-        plaintext = f.read()
+def _feedback_bit(state: int) -> int:
+    """Compute the feedback bit for the current 128-bit LFSR state.
 
-    keystream = run_lfsr_generator(seed, len(plaintext))
-    ciphertext = bytes(p ^ k for p, k in zip(plaintext, keystream))
+    Feedback taps (per technical specification):
+      bit 127 XOR bit 30 XOR bit 12 XOR bit 2 XOR 1
+    which corresponds to the polynomial
+      x^128 + x^31 + x^13 + x^3 + 1
+    together with the constant-1 affine term.
+    """
+    return (
+        ((state >> 127) & 1)
+        ^ ((state >> 30) & 1)
+        ^ ((state >> 12) & 1)
+        ^ ((state >> 2) & 1)
+        ^ 1
+    )
 
-    with open(output_path, "wb") as f:
-        f.write(ciphertext)
+
+def shift(state: int) -> int:
+    """Shift the register left by one and insert the feedback bit into the LSB."""
+    fb = _feedback_bit(state)
+    return ((state << 1) | fb) & MASK_128
 
 
-def main() -> None:
-    if len(sys.argv) < 4:
-        print(
-            "Usage: python legacy_cipher.py encrypt <input_file> <output_ciphertext_file>"
-        )
-        return
+def next_keystream_byte(state: int) -> tuple[int, int]:
+    """Generate one keystream byte and return (new_state, keystream_byte).
 
-    command = sys.argv[1]
-    input_file = sys.argv[2]
-    output_file = sys.argv[3]
+    One byte is produced by performing eight shift operations. After each
+    shift, the LSB is collected into the output byte from bit 0 through bit 7.
+    """
+    byte = 0
+    for i in range(8):
+        state = shift(state)
+        byte |= (state & 1) << i
+    return state, byte
 
-    # Hardcoded test seed (128 bits of alternating 1s and 0s for testing)
-    test_seed = [i % 2 for i in range(STATE_SIZE)]
 
-    if command == "encrypt":
-        encrypt_file(input_file, output_file, test_seed)
-        print(f"Successfully encrypted '{input_file}' to '{output_file}'.")
+def keystream(seed: int, length: int) -> bytes:
+    """Generate ``length`` keystream bytes from the initial 128-bit state."""
+    state = seed & MASK_128
+    out = bytearray()
+    for _ in range(length):
+        state, ks = next_keystream_byte(state)
+        out.append(ks)
+    return bytes(out)
+
+
+def encrypt(plaintext: bytes, seed: int) -> bytes:
+    """Encrypt plaintext: ciphertext = plaintext XOR keystream."""
+    ks = keystream(seed, len(plaintext))
+    return bytes(p ^ k for p, k in zip(plaintext, ks))
+
+
+def decrypt(ciphertext: bytes, seed: int) -> bytes:
+    """Decrypt ciphertext (identical to encrypt for a stream cipher)."""
+    return encrypt(ciphertext, seed)
 
 
 if __name__ == "__main__":
-    main()
+    # Minimal self-check (does not expose challenge secrets).
+    demo_seed = 0x0123456789ABCDEF0123456789ABCDEF
+    demo_pt = b"SYSTEM_OVERFLOW!"
+    ct = encrypt(demo_pt, demo_seed)
+    assert decrypt(ct, demo_seed) == demo_pt
+    print("legacy_cipher self-check OK")
+    print(f"demo ciphertext: {ct.hex()}")
