@@ -24,26 +24,38 @@ def solve_gf2(matrix: list[list[int]]) -> list[int]:
     if cols != rows + 1:
         raise ValueError(f"Invalid matrix dimensions. Expected {rows}x{rows+1}, got {rows}x{cols}.")
 
+    # iterates through each column to transform the matrix into upper-triangular form
     for i in range(rows):
         pivot_row = -1
+
+        # searches downward from the current diagonal position for a row with a leading 1 (pivot)
         for j in range(i, rows):
             if matrix[j][i] == 1:
                 pivot_row = j
                 break
         
+        # if no 1 is found in the current column, the matrix is linearly dependent
         if pivot_row == -1:
             raise ValueError(f"Singular matrix detected. No pivot found for column {i}. The system has no unique solution.")
         
+        # swaps the current row with the pivot row to position the leading 1 on the main diagonal
         matrix[i], matrix[pivot_row] = matrix[pivot_row], matrix[i]
         
+        # eliminates all 1s below the pivot in the current column using bitwise XOR addition
         for j in range(i + 1, rows):
             if matrix[j][i] == 1:
                 for k in range(i, cols):
                     matrix[j][k] ^= matrix[i][k]
-                    
+
+    # initializes the solution vector with zeros for all variables       
     solution = [0] * rows
+    
+    # iterates backward from the last row to the first to isolate each variable value
     for i in range(rows - 1, -1, -1):
+        # assigns the constant value of the current row to the corresponding solution variable
         solution[i] = matrix[i][cols - 1]
+
+        # eliminates the resolved variable from all rows above it to clear upper-diagonal elements
         for j in range(i - 1, -1, -1):
             if matrix[j][i] == 1:
                 matrix[j][cols - 1] ^= solution[i]
