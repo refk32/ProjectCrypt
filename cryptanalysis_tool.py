@@ -24,69 +24,45 @@ import argparse
 import sys
 from typing import List
 from gf2_solver import solve_gf2
-from lsfr_utils import bits_to_hex_string, hex_string_to_bits
+from lsfr_utils import hex_string_to_bits
 from config import STATE_SIZE, TAP_POSITIONS
 
-
-# TAP_POSITIONS = [127, 30, 12, 2]
-# STATE_SIZE = 128
-# SYSTEM_HEADER = b"SYSTEM_OVERFLOW!"
-
-
 def run_lfsr_generator(seed: List[int], num_bytes: int) -> bytes:
-    """Simulates the legacy 128-bit linear feedback shift register (LFSR) forward
-
-    to generate a pseudo-random keystream of a specified byte length.
+    """Generates a keystream of a specified length using the legacy 128-bit LFSR.
 
     Args:
-        seed (List[int]): A list of 128 integers (0s and 1s) representing the
-          initial state.
-        num_bytes (int): The number of output bytes to generate from the keystream.
+        seed (List[int]): The 128-bit initial state represented as a list of integers.
+        num_bytes (int): The number of keystream bytes to generate.
 
     Returns:
-        bytes: The generated raw keystream bytes.
+        bytes: The generated keystream.
     """
-    current_state = list(seed)
+    state = 0
+    for i in range(128):
+        state |= (seed[i] << i)
+
     keystream_bytes = bytearray()
-
     for _ in range(num_bytes):
-        keystream_byte = 0
-        for bit_idx in range(8):
-            lsb = current_state[0]
-            keystream_byte |= lsb << bit_idx
-
-            feedback = (
-                current_state[127]
-                ^ current_state[30]
-                ^ current_state[12]
-                ^ current_state[2]
-                ^ 1
-            )
-            current_state = current_state[1:] + [feedback]
-
-        keystream_bytes.append(keystream_byte)
+        byte_val = 0
+        for i in range(8):
+            fb = ((state >> 127) & 1) ^ ((state >> 30) & 1) ^ ((state >> 12) & 1) ^ ((state >> 2) & 1) ^ 1
+            state = ((state << 1) | fb) & ((1 << 128) - 1)
+            byte_val |= (state & 1) << i
+        keystream_bytes.append(byte_val)
     return bytes(keystream_bytes)
 
-
-
-def extract_keystream(ciphertext_bytes: bytes, header_bytes : bytes) -> List[int]:
-    """Extracts 128 bits of raw keystream by performing a bitwise XOR operation
-
-    between the first 16 bytes of ciphertext and the known plaintext header.
+def extract_keystream(ciphertext_bytes: bytes, header_bytes: bytes) -> List[int]:
+    """Extracts 128 bits of keystream by XORing the ciphertext with a known header.
 
     Args:
-        ciphertext_bytes (bytes): The full binary contents of the encrypted file.
+        ciphertext_bytes (bytes): The full encrypted payload.
+        header_bytes (bytes): The known plaintext header (must be at least 16 bytes).
 
     Returns:
         List[int]: A list of 128 extracted keystream bits.
-
-    Raises:
-        ValueError: If the provided ciphertext is shorter than 16 bytes.
     """
     if len(ciphertext_bytes) < 16:
-        raise ValueError(
-            "Ciphertext is too short. Must be at least 16 bytes to extract the header."
-        )
+        raise ValueError()
 
     keystream_bits: List[int] = []
     for i in range(16):
@@ -96,82 +72,86 @@ def extract_keystream(ciphertext_bytes: bytes, header_bytes : bytes) -> List[int
             keystream_bits.append(bit)
     return keystream_bits
 
-
 def build_lfsr_matrix(keystream_bits: List[int]) -> List[List[int]]:
-    """Constructs a 128x129 augmented matrix mapping the linear relationships
-
-    of the LFSR feedback configuration over Galois Field 2 (GF(2)).
+    """Constructs a 128x129 augmented matrix mapping the LFSR's linear relationships.
 
     Args:
-        keystream_bits (List[int]): Exactly 128 extracted keystream bits to act
-          as the constants column.
+        keystream_bits (List[int]): The 128 extracted keystream bits.
 
     Returns:
-        List[List[int]]: A 128x129 grid representing the linear system of equations.
-
-    Raises:
-        ValueError: If the keystream length deviates from 128 bits.
+        List[List[int]]: The augmented matrix for GF(2) resolution.
     """
     if len(keystream_bits) != STATE_SIZE:
-        raise ValueError(f"Expected exactly {STATE_SIZE} keystream bits.")
+        raise ValueError()
 
     matrix = [[0] * (STATE_SIZE + 1) for _ in range(STATE_SIZE)]
     state_row = [[0] * STATE_SIZE for _ in range(STATE_SIZE)]
+    state_const = [0] * STATE_SIZE
+
     for i in range(STATE_SIZE):
         state_row[i][i] = 1
 
     for row in range(STATE_SIZE):
-        for col in range(STATE_SIZE):
-            matrix[row][col] = state_row[0][col]
-
-        matrix[row][STATE_SIZE] = keystream_bits[row]
-
-        next_row = [0] * STATE_SIZE
-        for i in range(STATE_SIZE - 1):
-            next_row[i] = state_row[i + 1]
-
         feedback_row = [0] * STATE_SIZE
+        feedback_const = 1
+        
         for tap in TAP_POSITIONS:
             for col in range(STATE_SIZE):
                 feedback_row[col] ^= state_row[tap][col]
+            feedback_const ^= state_const[tap]
 
-        next_row[STATE_SIZE - 1] = feedback_row
-        state_row = next_row
+        for col in range(STATE_SIZE):
+            matrix[row][col] = feedback_row[col]
+
+        matrix[row][STATE_SIZE] = keystream_bits[row] ^ feedback_const
+
+        next_state_row = [[0] * STATE_SIZE for _ in range(STATE_SIZE)]
+        next_state_const = [0] * STATE_SIZE
+        
+        next_state_row[0] = feedback_row
+        next_state_const[0] = feedback_const
+        
+        for i in range(1, STATE_SIZE):
+            next_state_row[i] = state_row[i - 1]
+            next_state_const[i] = state_const[i - 1]
+        
+        state_row = next_state_row
+        state_const = next_state_const
 
     return matrix
 
-
 def decrypt_ciphertext(ciphertext_bytes: bytes, seed: List[int]) -> bytes:
-    """Decrypts a full ciphertext payload by generating a matching keystream
-
-    from the recovered initial seed and applying a bitwise XOR reversal.
+    """Decrypts the full payload using the recovered initial seed.
 
     Args:
-        ciphertext_bytes (bytes): The full encrypted payload.
-        seed (List[int]): The recovered 128-bit initial seed state.
+        ciphertext_bytes (bytes): The full encrypted data.
+        seed (List[int]): The recovered 128-bit LFSR state.
 
     Returns:
-        bytes: The fully decrypted plaintext data.
+        bytes: The decrypted plaintext data.
     """
     keystream = run_lfsr_generator(seed, len(ciphertext_bytes))
     return bytes(c ^ k for c, k in zip(ciphertext_bytes, keystream))
 
-
 def mode_crack(ciphertext_path: str, known_plaintext: str) -> None:
-    """Executes Mode 1 (Crack): Manages the end-to-end known-plaintext attack pipeline,
-
-    including file ingestion, keystream extraction, matrix building, GF(2) resolution,
-    payload decryption, and artifact output.
+    """Executes the known-plaintext attack to recover the seed and decrypt the file.
 
     Args:
-        ciphertext_path (str): The local file path to the target ciphertext.
-        known_plaintext (str): The expected starting header string used for the attack.
+        ciphertext_path (str): Path to the target encrypted file (.bin or .hex).
+        known_plaintext (str): The expected starting header string.
     """
     header_bytes = known_plaintext.encode("utf-8")
 
     try:
         with open(ciphertext_path, "rb") as f:
-            ciphertext_bytes = f.read()
+            raw_data = f.read()
+            
+        try:
+            text_data = raw_data.decode('ascii').strip()
+            ciphertext_bytes = bytes.fromhex(text_data)
+        except (UnicodeDecodeError, ValueError):
+            ciphertext_bytes = raw_data
+            
     except IOError as e:
         print(f"Error: Could not read file '{ciphertext_path}': {e}")
         sys.exit(1)
@@ -189,7 +169,10 @@ def mode_crack(ciphertext_path: str, known_plaintext: str) -> None:
         print(f"Error during matrix resolution: {e}")
         sys.exit(1)
 
-    recovered_hex = bits_to_hex_string(seed_bits)
+    seed_int = 0
+    for i in range(128):
+        seed_int |= (seed_bits[i] << i)
+    recovered_hex = hex(seed_int)[2:].zfill(32)
     print(f"\n[+] Recovered initial state (Hex): {recovered_hex}")
 
     print("[*] Decrypting entire ciphertext...")
@@ -200,8 +183,8 @@ def mode_crack(ciphertext_path: str, known_plaintext: str) -> None:
         with open(output_file, "wb") as f:
             f.write(decrypted_bytes)
         print(f"[+] Saved decrypted plaintext to: {output_file}")
-    except IOError as e:
-        print(f"Error saving output file: {e}")
+    except IOError:
+        pass
 
     print("\n--- Fully Decrypted Plaintext / FLAG ---")
     try:
@@ -209,20 +192,16 @@ def mode_crack(ciphertext_path: str, known_plaintext: str) -> None:
     except UnicodeDecodeError:
         print(decrypted_bytes)
 
-
 def mode_verify(seed_hex: str, plaintext_str: str) -> None:
-    """Executes Mode 2 (Verify): Re-encrypts a provided plaintext string using a
-
-    given hex-encoded seed state to test and validate system consistency.
+    """Re-encrypts a plaintext string using a specific LFSR seed for validation.
 
     Args:
-        seed_hex (str): The 32-character hex string representing the test seed.
-        plaintext_str (str): The plaintext message string to encrypt.
+        seed_hex (str): A 32-character hexadecimal string representing the state.
+        plaintext_str (str): The plaintext string to encrypt.
     """
     try:
         seed_bits = hex_string_to_bits(seed_hex)
-    except Exception as e:
-        print(f"Error parsing hex seed: {e}")
+    except Exception:
         sys.exit(1)
 
     plaintext_bytes = plaintext_str.encode("utf-8")
@@ -231,22 +210,18 @@ def mode_verify(seed_hex: str, plaintext_str: str) -> None:
 
     print(f"\n[+] Resulting Ciphertext (Hex): {ciphertext_bytes.hex()}")
 
-
 def main() -> None:
-    """Parses command-line arguments and routes execution into either
-
-    the cryptanalytic crack mode or the verification re-encryption mode.
-    """
-    parser = argparse.ArgumentParser(description="Cryptanalysis Tool for Legacy LFSR Ciphers")
+    """Parses command-line arguments and routes execution to the specified mode."""
+    parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    parser_crack = subparsers.add_parser("crack", help="Crack ciphertext using known plaintext")
-    parser_crack.add_argument("--ciphertext", required=True, help="Path to ciphertext file")
-    parser_crack.add_argument("--known-plaintext", default="SYSTEM_OVERFLOW!", help="Known plaintext header")
+    parser_crack = subparsers.add_parser("crack")
+    parser_crack.add_argument("--ciphertext", required=True)
+    parser_crack.add_argument("--known-plaintext", default="SYSTEM_OVERFLOW!")
 
-    parser_verify = subparsers.add_parser("verify", help="Re-encrypt plaintext using legacy LFSR")
-    parser_verify.add_argument("--seed", required=True, help="Initial LFSR seed in hex format")
-    parser_verify.add_argument("--plaintext", required=True, help="Plaintext string to encrypt")
+    parser_verify = subparsers.add_parser("verify")
+    parser_verify.add_argument("--seed", required=True)
+    parser_verify.add_argument("--plaintext", required=True)
 
     args = parser.parse_args()
 
@@ -254,7 +229,6 @@ def main() -> None:
         mode_crack(args.ciphertext, args.known_plaintext)
     elif args.mode == "verify":
         mode_verify(args.seed, args.plaintext)
-
 
 if __name__ == "__main__":
     main()
